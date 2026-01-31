@@ -5,7 +5,7 @@ A lightweight TypeScript ORM for PostgreSQL.
 ## Installation
 
 ```bash
-bun add pg reflect-metadata
+bun add @woop-orm/core pg reflect-metadata
 bun add -d @types/pg
 ```
 
@@ -14,7 +14,7 @@ bun add -d @types/pg
 ### 1. Initialize Connection
 
 ```typescript
-import { WoopORM } from './src';
+import { WoopORM } from '@woop-orm/core';
 
 WoopORM.connect({
   type: 'postgres',
@@ -27,7 +27,7 @@ WoopORM.connect({
 Use decorators to define your entities. This is cleaner and safer.
 
 ```typescript
-import { Model, Entity, Column } from './src';
+import { Model, Entity, Column } from '@woop-orm/core';
 
 @Entity('users')
 class User extends Model {

@@ -10,7 +10,12 @@ export function Entity(tableName?: string) {
   };
 }
 
-export function Column(options: { name?: string } = {}) {
+export interface ColumnOptions {
+  name?: string;
+  primary?: boolean;
+}
+
+export function Column(options: ColumnOptions = {}) {
   return function (target: any, propertyKey: string) {
     const columns = Reflect.getMetadata(COLUMNS_KEY, target.constructor) || [];
     columns.push({
