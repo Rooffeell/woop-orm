@@ -7,14 +7,29 @@ import { SchemaSelector } from "@/components/schema-selector";
 import { TableActions } from "@/components/table-actions";
 import { DataTable } from "@/components/data-table";
 
+import { PaginationControls } from "@/components/pagination-controls";
+
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ table?: string; schema?: string }>;
+  searchParams: Promise<{ 
+    table?: string; 
+    schema?: string;
+    filter_col?: string;
+    filter_op?: string;
+    filter_val?: string;
+    page?: string;
+  }>;
 }) {
   const params = await searchParams;
   const selectedSchema = params.schema || 'public';
   const selectedTable = params.table;
+  const filterCol = params.filter_col;
+  const filterOp = params.filter_op;
+  const filterVal = params.filter_val;
+  const page = Number(params.page) || 1;
+  const limit = 100;
+  const offset = (page - 1) * limit;
 
   // 0. Fetch Schemas
   const { rows: schemaRows } = await query(`
@@ -41,6 +56,7 @@ export default async function Home({
   let columns: string[] = [];
   let columnDefs: any[] = [];
   let primaryKey: string[] = [];
+  let totalRows = 0;
   let error = null;
 
   if (selectedTable) {
@@ -72,8 +88,49 @@ export default async function Home({
         primaryKey = pkResult.rows.map((r: any) => r.column_name);
 
         // Use double quotes for schema and table to handle special characters/case sensitivity
-        const result = await query(`SELECT * FROM "${selectedSchema}"."${selectedTable}" LIMIT 100`);
+        let queryStr = `SELECT * FROM "${selectedSchema}"."${selectedTable}"`;
+        let countQueryStr = `SELECT COUNT(*) as count FROM "${selectedSchema}"."${selectedTable}"`;
+        const queryParams: any[] = [];
+        let whereClause = "";
+
+        if (filterCol && filterOp && filterVal) {
+             const isValidCol = columnDefs.some((c: any) => c.column_name === filterCol);
+             if (isValidCol) {
+                 let op = "=";
+                 switch (filterOp) {
+                     case 'eq': op = '='; break;
+                     case 'neq': op = '!='; break;
+                     case 'gt': op = '>'; break;
+                     case 'lt': op = '<'; break;
+                     case 'gte': op = '>='; break;
+                     case 'lte': op = '<='; break;
+                     case 'like': op = 'LIKE'; break;
+                     case 'ilike': op = 'ILIKE'; break;
+                     default: op = '=';
+                 }
+                 
+                 let val = filterVal;
+                 if (filterOp === 'like' || filterOp === 'ilike') {
+                     val = `%${filterVal}%`;
+                 }
+
+                 whereClause = ` WHERE "${filterCol}" ${op} $1`;
+                 queryParams.push(val);
+             }
+        }
+
+        queryStr += whereClause;
+        countQueryStr += whereClause;
+
+        queryStr += ` LIMIT ${limit} OFFSET ${offset}`;
+
+        const [result, countResult] = await Promise.all([
+            query(queryStr, queryParams),
+            query(countQueryStr, queryParams)
+        ]);
+
         tableData = result.rows;
+        totalRows = parseInt(countResult.rows[0].count, 10);
         
         if (tableData.length > 0) {
             columns = Object.keys(tableData[0]);
@@ -147,7 +204,9 @@ export default async function Home({
               <div className="flex items-center gap-2">
                 <h1 className="text-lg font-semibold">{selectedTable}</h1>
                 <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                  {tableData.length} rows
+                  {tableData.length > 0 
+                    ? `Showing ${offset + 1}-${offset + tableData.length} of ${totalRows} rows`
+                    : totalRows > 0 ? 'Page out of range' : '0 rows'}
                 </span>
               </div>
               
@@ -159,20 +218,37 @@ export default async function Home({
             </div>
             
             {/* Table Container - No Padding, Full Size */}
-            <div className="flex-1 overflow-hidden bg-background">
+            <div className="flex-1 overflow-hidden bg-background flex flex-col">
                {error ? (
                    <div className="m-8 rounded-md bg-destructive/15 p-4 text-destructive">
                        Error: {error}
                    </div>
                ) : (
-                   <DataTable 
-                     data={tableData} 
-                     columns={columns} 
-                     primaryKey={primaryKey}
-                     schema={selectedSchema}
-                     table={selectedTable}
-                     columnDefs={columnDefs}
-                   />
+                   <>
+                       <div className="flex-1 overflow-hidden">
+                           <DataTable 
+                             data={tableData} 
+                             columns={columns} 
+                             primaryKey={primaryKey}
+                             schema={selectedSchema}
+                             table={selectedTable}
+                             columnDefs={columnDefs}
+                           />
+                       </div>
+                       <PaginationControls 
+                           currentPage={page}
+                           hasNextPage={offset + limit < totalRows}
+                           hasPrevPage={page > 1}
+                           baseUrl="/"
+                           searchParams={{
+                               schema: selectedSchema,
+                               table: selectedTable,
+                               filter_col: filterCol,
+                               filter_op: filterOp,
+                               filter_val: filterVal
+                           }}
+                       />
+                   </>
                )}
             </div>
           </>

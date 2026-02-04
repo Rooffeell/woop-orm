@@ -205,7 +205,7 @@ export function DataTable({ data, columns, primaryKey, schema, table, columnDefs
       <Table>
         <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
           <TableRow className="border-b">
-            <TableHead className="w-[50px] border-r bg-muted/20 text-center p-0 align-middle">
+            <TableHead className="w-[50px] min-w-[50px] border-r bg-muted/20 text-center p-0 align-middle">
               <div className="flex justify-center items-center w-full h-full">
                 <Checkbox 
                   checked={isAllSelected}
@@ -214,7 +214,7 @@ export function DataTable({ data, columns, primaryKey, schema, table, columnDefs
               </div>
             </TableHead>
             {columns.map((col) => (
-              <TableHead key={col} className="h-10 border-r last:border-r-0 font-semibold bg-muted/20">
+              <TableHead key={col} className="h-10 border-r last:border-r-0 font-semibold bg-muted/20 whitespace-nowrap px-4">
                 {col}
                 {primaryKey.includes(col) && <span className="ml-1 text-xs text-primary">(PK)</span>}
               </TableHead>
@@ -228,7 +228,7 @@ export function DataTable({ data, columns, primaryKey, schema, table, columnDefs
             
             return (
                 <TableRow key={i} className={`hover:bg-muted/50 ${isSelected ? 'bg-primary/5' : ''}`}>
-                <TableCell className="border-r w-[50px] text-center p-0 align-middle">
+                <TableCell className="border-r w-[50px] min-w-[50px] text-center p-0 align-middle">
                     <div className="flex justify-center items-center w-full h-full">
                         <Checkbox 
                             checked={isSelected}
@@ -237,7 +237,7 @@ export function DataTable({ data, columns, primaryKey, schema, table, columnDefs
                     </div>
                 </TableCell>
                 {columns.map((col) => (
-                    <TableCell key={`${i}-${col}`} className="border-r last:border-r-0 py-2 whitespace-nowrap">
+                    <TableCell key={`${i}-${col}`} className="border-r last:border-r-0 py-2 px-4 whitespace-nowrap">
                     {row[col]?.toString() ?? <span className="text-muted-foreground italic text-xs">null</span>}
                     </TableCell>
                 ))}

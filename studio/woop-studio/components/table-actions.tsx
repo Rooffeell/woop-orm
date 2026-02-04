@@ -1,10 +1,17 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useEffect } from "react"
+import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Sheet,
   SheetContent,
@@ -15,7 +22,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { insertRecord } from "@/app/actions"
-import { Loader2, RefreshCw, Plus } from "lucide-react"
+import { Loader2, RefreshCw, Plus, Filter } from "lucide-react"
 
 interface ColumnDef {
   column_name: string
@@ -32,13 +39,56 @@ interface TableActionsProps {
 
 export function TableActions({ schema, table, columns }: TableActionsProps) {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  
   const [isOpen, setIsOpen] = useState(false)
+  const [isFilterOpen, setIsFilterOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formData, setFormData] = useState<Record<string, any>>({})
   const [error, setError] = useState<string | null>(null)
 
+  // Filter state
+  const [filterCol, setFilterCol] = useState("")
+  const [filterOp, setFilterOp] = useState("eq")
+  const [filterVal, setFilterVal] = useState("")
+
+  // Initialize filter state from URL
+  useEffect(() => {
+    setFilterCol(searchParams.get('filter_col') || "")
+    setFilterOp(searchParams.get('filter_op') || "eq")
+    setFilterVal(searchParams.get('filter_val') || "")
+  }, [searchParams])
+
   const handleRefresh = () => {
     router.refresh()
+  }
+
+  const handleApplyFilter = () => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (filterCol && filterVal) {
+      params.set('filter_col', filterCol)
+      params.set('filter_op', filterOp)
+      params.set('filter_val', filterVal)
+      params.set('page', '1') // Reset page
+    }
+    router.replace(`${pathname}?${params.toString()}`)
+    setIsFilterOpen(false)
+  }
+
+  const handleClearFilter = () => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete('filter_col')
+    params.delete('filter_op')
+    params.delete('filter_val')
+    params.set('page', '1')
+    
+    setFilterCol("")
+    setFilterOp("eq")
+    setFilterVal("")
+    
+    router.replace(`${pathname}?${params.toString()}`)
+    setIsFilterOpen(false)
   }
 
   const handleInputChange = (colName: string, value: string) => {
@@ -53,7 +103,6 @@ export function TableActions({ schema, table, columns }: TableActionsProps) {
     setIsSubmitting(true)
     setError(null)
 
-    // Filter out empty strings if column is nullable or has default
     const dataToSubmit: Record<string, any> = {}
     
     columns.forEach(col => {
@@ -84,11 +133,73 @@ export function TableActions({ schema, table, columns }: TableActionsProps) {
     return 'text'
   }
 
-  // Filter out auto-generated columns usually (like serial id), but for now show all
-  // Usually we might want to skip columns with defaults if they are not nullable, but let's just show all
-  
   return (
     <div className="flex gap-2">
+      <Sheet open={isFilterOpen} onOpenChange={setIsFilterOpen}>
+        <SheetTrigger asChild>
+          <Button variant="outline" size="sm" className="h-8 gap-2">
+            <Filter className="h-3.5 w-3.5" />
+            Filter
+          </Button>
+        </SheetTrigger>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>Filter Table</SheetTitle>
+            <SheetDescription>
+              Filter records in {table}.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="column">Column</Label>
+              <Select value={filterCol} onValueChange={setFilterCol}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select column" />
+                </SelectTrigger>
+                <SelectContent>
+                  {columns.map((col) => (
+                    <SelectItem key={col.column_name} value={col.column_name}>
+                      {col.column_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="operator">Operator</Label>
+              <Select value={filterOp} onValueChange={setFilterOp}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select operator" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="eq">Equals (=)</SelectItem>
+                  <SelectItem value="neq">Not Equals (!=)</SelectItem>
+                  <SelectItem value="gt">Greater Than (&gt;)</SelectItem>
+                  <SelectItem value="gte">Greater Than or Equal (&gt;=)</SelectItem>
+                  <SelectItem value="lt">Less Than (&lt;)</SelectItem>
+                  <SelectItem value="lte">Less Than or Equal (&lt;=)</SelectItem>
+                  <SelectItem value="like">Like (Contains)</SelectItem>
+                  <SelectItem value="ilike">ILike (Case Insensitive)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="value">Value</Label>
+              <Input
+                id="value"
+                value={filterVal}
+                onChange={(e) => setFilterVal(e.target.value)}
+                placeholder="Value to filter by..."
+              />
+            </div>
+            <div className="flex gap-2 mt-4">
+              <Button onClick={handleApplyFilter} className="flex-1">Apply Filter</Button>
+              <Button variant="outline" onClick={handleClearFilter} className="flex-1">Clear</Button>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
       <Button variant="outline" size="sm" className="h-8 gap-2" onClick={handleRefresh}>
         <RefreshCw className="h-3.5 w-3.5" />
         Refresh
@@ -118,10 +229,6 @@ export function TableActions({ schema, table, columns }: TableActionsProps) {
             
             {columns.map((col) => {
               const inputType = getInputType(col.data_type)
-              
-              // Skip if it looks like an auto-incrementing ID (integer + default value nextval)
-              // But strictly speaking we should allow overriding it.
-              // Let's just render everything for maximum flexibility as requested ("knows the data types")
               
               return (
                 <div key={col.column_name} className="space-y-2">
