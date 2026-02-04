@@ -6,6 +6,8 @@ import { Separator } from "@/components/ui/separator";
 import { SchemaSelector } from "@/components/schema-selector";
 import { TableActions } from "@/components/table-actions";
 import { DataTable } from "@/components/data-table";
+import { SchemaGraph } from "@/components/schema-graph";
+import { Network, Table2 } from "lucide-react";
 
 import { PaginationControls } from "@/components/pagination-controls";
 
@@ -18,7 +20,11 @@ export default async function Home({
     filter_col?: string;
     filter_op?: string;
     filter_val?: string;
+    filters?: string;
+    sort_col?: string;
+    sort_order?: string;
     page?: string;
+    view?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -27,7 +33,11 @@ export default async function Home({
   const filterCol = params.filter_col;
   const filterOp = params.filter_op;
   const filterVal = params.filter_val;
+  const filtersParam = params.filters;
+  const sortCol = params.sort_col;
+  const sortOrder = params.sort_order;
   const page = Number(params.page) || 1;
+  const view = params.view || 'data';
   const limit = 100;
   const offset = (page - 1) * limit;
 
@@ -51,7 +61,70 @@ export default async function Home({
     ORDER BY table_name
   `, [selectedSchema]);
 
-  // 2. Fetch Data if table selected
+  // Graph Data
+  let graphTables: any[] = [];
+  let graphRelationships: any[] = [];
+
+  if (view === 'graph') {
+      const { rows: allColumns } = await query(`
+        SELECT table_name, column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = $1
+        ORDER BY table_name, ordinal_position
+      `, [selectedSchema]);
+
+      const { rows: fks } = await query(`
+        SELECT
+            tc.table_name as "fromTable",
+            kcu.column_name as "fromColumn",
+            ccu.table_name as "toTable",
+            ccu.column_name as "toColumn"
+        FROM
+            information_schema.table_constraints AS tc
+            JOIN information_schema.key_column_usage AS kcu
+              ON tc.constraint_name = kcu.constraint_name
+              AND tc.table_schema = kcu.table_schema
+            JOIN information_schema.constraint_column_usage AS ccu
+              ON ccu.constraint_name = tc.constraint_name
+              AND ccu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1
+      `, [selectedSchema]);
+
+      // Determine PKs for graph
+      const { rows: pks } = await query(`
+        SELECT kcu.table_name, kcu.column_name
+        FROM information_schema.key_column_usage kcu
+        JOIN information_schema.table_constraints tc
+          ON kcu.constraint_name = tc.constraint_name
+          AND kcu.table_schema = tc.table_schema
+        WHERE kcu.table_schema = $1
+          AND tc.constraint_type = 'PRIMARY KEY'
+      `, [selectedSchema]);
+
+      const pkMap = new Set(pks.map((p: any) => `${p.table_name}.${p.column_name}`));
+
+      // Group columns by table
+      const tablesMap = new Map();
+      allColumns.forEach((col: any) => {
+          if (!tablesMap.has(col.table_name)) {
+              tablesMap.set(col.table_name, []);
+          }
+          tablesMap.get(col.table_name).push({
+              name: col.column_name,
+              type: col.data_type,
+              isPk: pkMap.has(`${col.table_name}.${col.column_name}`)
+          });
+      });
+
+      graphTables = Array.from(tablesMap.entries()).map(([tableName, columns]) => ({
+          tableName,
+          columns
+      }));
+
+      graphRelationships = fks;
+  }
+
+  // 2. Fetch Data if table selected (ONLY IF VIEW IS DATA)
   let tableData: any[] = [];
   let columns: string[] = [];
   let columnDefs: any[] = [];
@@ -59,7 +132,7 @@ export default async function Home({
   let totalRows = 0;
   let error = null;
 
-  if (selectedTable) {
+  if (view === 'data' && selectedTable) {
     // Security check: ensure selectedTable is in the list of tables
     const tableExists = tables.some((t: any) => t.table_name === selectedTable);
     
@@ -92,35 +165,73 @@ export default async function Home({
         let countQueryStr = `SELECT COUNT(*) as count FROM "${selectedSchema}"."${selectedTable}"`;
         const queryParams: any[] = [];
         let whereClause = "";
+        
+        const filters: Array<{ col: string, op: string, val: string }> = [];
 
+        // Support legacy single filter params
         if (filterCol && filterOp && filterVal) {
-             const isValidCol = columnDefs.some((c: any) => c.column_name === filterCol);
-             if (isValidCol) {
-                 let op = "=";
-                 switch (filterOp) {
-                     case 'eq': op = '='; break;
-                     case 'neq': op = '!='; break;
-                     case 'gt': op = '>'; break;
-                     case 'lt': op = '<'; break;
-                     case 'gte': op = '>='; break;
-                     case 'lte': op = '<='; break;
-                     case 'like': op = 'LIKE'; break;
-                     case 'ilike': op = 'ILIKE'; break;
-                     default: op = '=';
-                 }
-                 
-                 let val = filterVal;
-                 if (filterOp === 'like' || filterOp === 'ilike') {
-                     val = `%${filterVal}%`;
-                 }
+            filters.push({ col: filterCol, op: filterOp, val: filterVal });
+        }
+        
+        // Support new multiple filters param
+        if (filtersParam) {
+            try {
+                const parsed = JSON.parse(filtersParam);
+                if (Array.isArray(parsed)) {
+                    filters.push(...parsed);
+                }
+            } catch (e) {
+                console.error("Failed to parse filters param", e);
+            }
+        }
 
-                 whereClause = ` WHERE "${filterCol}" ${op} $1`;
-                 queryParams.push(val);
+        if (filters.length > 0) {
+             const conditions: string[] = [];
+             
+             filters.forEach((filter) => {
+                 const isValidCol = columnDefs.some((c: any) => c.column_name === filter.col);
+                 if (isValidCol) {
+                     let op = "=";
+                     switch (filter.op) {
+                         case 'eq': op = '='; break;
+                         case 'neq': op = '!='; break;
+                         case 'gt': op = '>'; break;
+                         case 'lt': op = '<'; break;
+                         case 'gte': op = '>='; break;
+                         case 'lte': op = '<='; break;
+                         case 'like': op = 'LIKE'; break;
+                         case 'ilike': op = 'ILIKE'; break;
+                         default: op = '=';
+                     }
+                     
+                     let val = filter.val;
+                     if (filter.op === 'like' || filter.op === 'ilike') {
+                         val = `%${filter.val}%`;
+                     }
+    
+                     conditions.push(`"${filter.col}" ${op} $${queryParams.length + 1}`);
+                     queryParams.push(val);
+                 }
+             });
+
+             if (conditions.length > 0) {
+                 whereClause = ` WHERE ${conditions.join(" AND ")}`;
              }
         }
 
         queryStr += whereClause;
         countQueryStr += whereClause;
+
+        // Sorting
+        if (sortCol && sortOrder) {
+             const isValidSortCol = columnDefs.some((c: any) => c.column_name === sortCol);
+             if (isValidSortCol) {
+                 const order = sortOrder.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+                 queryStr += ` ORDER BY "${sortCol}" ${order}`;
+             }
+        } else if (primaryKey.length > 0) {
+            queryStr += ` ORDER BY "${primaryKey[0]}" ASC`;
+        }
 
         queryStr += ` LIMIT ${limit} OFFSET ${offset}`;
 
@@ -165,6 +276,26 @@ export default async function Home({
 
           <Separator className="my-4 mx-4 w-auto" />
 
+           <div className="px-4 mb-4">
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+              Views
+            </h2>
+             <nav className="space-y-0.5">
+                <Link
+                    href={`/?schema=${selectedSchema}&view=graph`}
+                    className={cn(
+                    "flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors",
+                    view === 'graph'
+                        ? "bg-primary/10 text-primary" 
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                >
+                    <Network className="mr-2 h-4 w-4" />
+                    Schema Graph
+                </Link>
+             </nav>
+           </div>
+
           <div className="px-4">
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
               Tables
@@ -174,11 +305,11 @@ export default async function Home({
                 <p className="text-sm text-muted-foreground px-2">No tables found.</p>
               ) : (
                 tables.map((table: any) => {
-                   const isActive = selectedTable === table.table_name;
+                   const isActive = view === 'data' && selectedTable === table.table_name;
                    return (
                     <Link
                         key={table.table_name}
-                        href={`/?schema=${selectedSchema}&table=${table.table_name}`}
+                        href={`/?schema=${selectedSchema}&table=${table.table_name}&view=data`}
                         className={cn(
                         "flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors",
                         isActive 
@@ -186,6 +317,7 @@ export default async function Home({
                             : "text-muted-foreground hover:bg-muted hover:text-foreground"
                         )}
                     >
+                        <Table2 className="mr-2 h-4 w-4 opacity-70" />
                         {table.table_name}
                     </Link>
                    );
@@ -198,7 +330,19 @@ export default async function Home({
 
       {/* RIGHT MAIN CONTENT */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
-        {selectedTable ? (
+        {view === 'graph' ? (
+            <>
+                <div className="h-14 px-6 flex items-center border-b bg-background z-20">
+                    <h1 className="text-lg font-semibold flex items-center">
+                        <Network className="mr-2 h-5 w-5" />
+                        Schema Visualization
+                    </h1>
+                </div>
+                <div className="flex-1 overflow-hidden bg-background">
+                    <SchemaGraph tables={graphTables} relationships={graphRelationships} />
+                </div>
+            </>
+        ) : selectedTable ? (
           <>
             <div className="h-14 px-6 flex items-center justify-between border-b bg-background z-20">
               <div className="flex items-center gap-2">
@@ -233,6 +377,8 @@ export default async function Home({
                              schema={selectedSchema}
                              table={selectedTable}
                              columnDefs={columnDefs}
+                             sortCol={sortCol}
+                             sortOrder={sortOrder}
                            />
                        </div>
                        <PaginationControls 
@@ -245,7 +391,10 @@ export default async function Home({
                                table: selectedTable,
                                filter_col: filterCol,
                                filter_op: filterOp,
-                               filter_val: filterVal
+                               filter_val: filterVal,
+                               sort_col: sortCol,
+                               sort_order: sortOrder,
+                               view: 'data'
                            }}
                        />
                    </>
@@ -255,7 +404,7 @@ export default async function Home({
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-muted/5">
             <div className="p-4 rounded-full bg-muted mb-4">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-table-2"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
+                <Table2 className="h-8 w-8" />
             </div>
             <p className="text-lg font-medium">Select a table to view data</p>
           </div>

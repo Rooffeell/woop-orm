@@ -5,6 +5,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
 import {
   Select,
   SelectContent,
@@ -22,7 +23,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { insertRecord } from "@/app/actions"
-import { Loader2, RefreshCw, Plus, Filter } from "lucide-react"
+import { Loader2, RefreshCw, Plus, Filter, Trash2, PlusCircle } from "lucide-react"
 
 interface ColumnDef {
   column_name: string
@@ -49,15 +50,32 @@ export function TableActions({ schema, table, columns }: TableActionsProps) {
   const [error, setError] = useState<string | null>(null)
 
   // Filter state
-  const [filterCol, setFilterCol] = useState("")
-  const [filterOp, setFilterOp] = useState("eq")
-  const [filterVal, setFilterVal] = useState("")
+  const [filters, setFilters] = useState<Array<{ col: string, op: string, val: string }>>([])
 
   // Initialize filter state from URL
   useEffect(() => {
-    setFilterCol(searchParams.get('filter_col') || "")
-    setFilterOp(searchParams.get('filter_op') || "eq")
-    setFilterVal(searchParams.get('filter_val') || "")
+    const filtersParam = searchParams.get('filters');
+    const legacyFilterCol = searchParams.get('filter_col');
+    
+    if (filtersParam) {
+        try {
+            const parsed = JSON.parse(filtersParam);
+            if (Array.isArray(parsed)) {
+                setFilters(parsed);
+                return;
+            }
+        } catch {}
+    }
+
+    if (legacyFilterCol) {
+        setFilters([{
+            col: searchParams.get('filter_col') || "",
+            op: searchParams.get('filter_op') || "eq",
+            val: searchParams.get('filter_val') || ""
+        }])
+    } else if (!filtersParam) {
+        setFilters([])
+    }
   }, [searchParams])
 
   const handleRefresh = () => {
@@ -66,12 +84,21 @@ export function TableActions({ schema, table, columns }: TableActionsProps) {
 
   const handleApplyFilter = () => {
     const params = new URLSearchParams(searchParams.toString())
-    if (filterCol && filterVal) {
-      params.set('filter_col', filterCol)
-      params.set('filter_op', filterOp)
-      params.set('filter_val', filterVal)
+    
+    // Clear legacy params
+    params.delete('filter_col')
+    params.delete('filter_op')
+    params.delete('filter_val')
+    
+    const validFilters = filters.filter(f => f.col && f.val);
+
+    if (validFilters.length > 0) {
+      params.set('filters', JSON.stringify(validFilters))
       params.set('page', '1') // Reset page
+    } else {
+      params.delete('filters')
     }
+
     router.replace(`${pathname}?${params.toString()}`)
     setIsFilterOpen(false)
   }
@@ -81,14 +108,29 @@ export function TableActions({ schema, table, columns }: TableActionsProps) {
     params.delete('filter_col')
     params.delete('filter_op')
     params.delete('filter_val')
+    params.delete('filters')
     params.set('page', '1')
     
-    setFilterCol("")
-    setFilterOp("eq")
-    setFilterVal("")
+    setFilters([])
     
     router.replace(`${pathname}?${params.toString()}`)
     setIsFilterOpen(false)
+  }
+
+  const addFilter = () => {
+      setFilters([...filters, { col: "", op: "eq", val: "" }])
+  }
+
+  const removeFilter = (index: number) => {
+      const newFilters = [...filters]
+      newFilters.splice(index, 1)
+      setFilters(newFilters)
+  }
+
+  const updateFilter = (index: number, field: 'col' | 'op' | 'val', value: string) => {
+      const newFilters = [...filters]
+      newFilters[index] = { ...newFilters[index], [field]: value }
+      setFilters(newFilters)
   }
 
   const handleInputChange = (colName: string, value: string) => {
@@ -137,64 +179,97 @@ export function TableActions({ schema, table, columns }: TableActionsProps) {
     <div className="flex gap-2">
       <Sheet open={isFilterOpen} onOpenChange={setIsFilterOpen}>
         <SheetTrigger asChild>
-          <Button variant="outline" size="sm" className="h-8 gap-2">
+          <Button variant="outline" size="sm" className="h-8 gap-2 relative">
             <Filter className="h-3.5 w-3.5" />
             Filter
+            {filters.length > 0 && (
+                <Badge variant="secondary" className="ml-1 px-1 h-5 min-w-[20px] flex items-center justify-center text-[10px]">
+                    {filters.length}
+                </Badge>
+            )}
           </Button>
         </SheetTrigger>
-        <SheetContent>
+        <SheetContent className="overflow-y-auto sm:max-w-md w-[500px]">
           <SheetHeader>
             <SheetTitle>Filter Table</SheetTitle>
             <SheetDescription>
               Filter records in {table}.
             </SheetDescription>
           </SheetHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="column">Column</Label>
-              <Select value={filterCol} onValueChange={setFilterCol}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select column" />
-                </SelectTrigger>
-                <SelectContent>
-                  {columns.map((col) => (
-                    <SelectItem key={col.column_name} value={col.column_name}>
-                      {col.column_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="operator">Operator</Label>
-              <Select value={filterOp} onValueChange={setFilterOp}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select operator" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="eq">Equals (=)</SelectItem>
-                  <SelectItem value="neq">Not Equals (!=)</SelectItem>
-                  <SelectItem value="gt">Greater Than (&gt;)</SelectItem>
-                  <SelectItem value="gte">Greater Than or Equal (&gt;=)</SelectItem>
-                  <SelectItem value="lt">Less Than (&lt;)</SelectItem>
-                  <SelectItem value="lte">Less Than or Equal (&lt;=)</SelectItem>
-                  <SelectItem value="like">Like (Contains)</SelectItem>
-                  <SelectItem value="ilike">ILike (Case Insensitive)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="value">Value</Label>
-              <Input
-                id="value"
-                value={filterVal}
-                onChange={(e) => setFilterVal(e.target.value)}
-                placeholder="Value to filter by..."
-              />
-            </div>
-            <div className="flex gap-2 mt-4">
-              <Button onClick={handleApplyFilter} className="flex-1">Apply Filter</Button>
-              <Button variant="outline" onClick={handleClearFilter} className="flex-1">Clear</Button>
+          <div className="flex flex-col gap-4 py-4">
+            {filters.length === 0 && (
+                <div className="text-center text-sm text-muted-foreground py-8">
+                    No filters applied. Click "Add Filter" to start.
+                </div>
+            )}
+            
+            {filters.map((filter, index) => (
+                <div key={index} className="flex flex-col gap-2 p-3 border rounded-md relative bg-muted/20">
+                    <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="absolute top-1 right-1 h-6 w-6 p-0 hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                        onClick={() => removeFilter(index)}
+                    >
+                        <Trash2 className="h-3 w-3" />
+                    </Button>
+                    
+                    <div className="grid gap-2">
+                        <Label className="text-xs">Column</Label>
+                        <Select value={filter.col} onValueChange={(val) => updateFilter(index, 'col', val)}>
+                            <SelectTrigger className="h-8">
+                                <SelectValue placeholder="Select column" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {columns.map((col) => (
+                                    <SelectItem key={col.column_name} value={col.column_name}>
+                                        {col.column_name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="grid gap-2">
+                            <Label className="text-xs">Operator</Label>
+                            <Select value={filter.op} onValueChange={(val) => updateFilter(index, 'op', val)}>
+                                <SelectTrigger className="h-8">
+                                    <SelectValue placeholder="Select operator" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="eq">Equals (=)</SelectItem>
+                                    <SelectItem value="neq">Not Equals (!=)</SelectItem>
+                                    <SelectItem value="gt">Greater Than (&gt;)</SelectItem>
+                                    <SelectItem value="gte">Greater Than or Equal (&gt;=)</SelectItem>
+                                    <SelectItem value="lt">Less Than (&lt;)</SelectItem>
+                                    <SelectItem value="lte">Less Than or Equal (&lt;=)</SelectItem>
+                                    <SelectItem value="like">Like (Contains)</SelectItem>
+                                    <SelectItem value="ilike">ILike (Case Insensitive)</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid gap-2">
+                            <Label className="text-xs">Value</Label>
+                            <Input
+                                value={filter.val}
+                                onChange={(e) => updateFilter(index, 'val', e.target.value)}
+                                placeholder="Value..."
+                                className="h-8"
+                            />
+                        </div>
+                    </div>
+                </div>
+            ))}
+
+            <Button variant="outline" size="sm" onClick={addFilter} className="gap-2 border-dashed">
+                <PlusCircle className="h-3.5 w-3.5" />
+                Add Filter
+            </Button>
+
+            <div className="flex gap-2 mt-4 pt-4 border-t">
+              <Button onClick={handleApplyFilter} className="flex-1">Apply Filters</Button>
+              <Button variant="outline" onClick={handleClearFilter} className="flex-1">Clear All</Button>
             </div>
           </div>
         </SheetContent>
